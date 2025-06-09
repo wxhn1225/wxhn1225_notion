@@ -1,6 +1,20 @@
-# 🚀 Notion到GitHub同步工具
+# 🚀 Notion 到 GitHub 同步工具
 
-一个强大的Python工具，可以将你的Notion笔记和数据库内容自动同步到GitHub仓库，支持智能文件夹分类、日期分组和批量提交。
+> 一个强大的 Python 工具，将你的 Notion 笔记和数据库内容自动同步到 GitHub 仓库
+
+[![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+## 🎯 项目简介
+
+这是一个专为 Notion 用户设计的同步工具，能够将你的 Notion 工作区内容智能地同步到 GitHub 仓库。无论是个人笔记、项目管理还是知识库，都能轻松实现版本控制和备份。
+
+**核心优势：**
+- 🔄 **智能同步**：自动检测内容变更，只同步真正有变化的文件
+- 📁 **智能分类**：根据 Notion 属性自动创建文件夹结构
+- 🗓️ **日期分组**：支持按时间段自动分组（如：2024年3月17日-23日）
+- 🚀 **批量提交**：所有变更合并到一个 commit，提高效率
+- 🛠️ **易于配置**：简单的环境变量配置，开箱即用
 
 ## ✨ 主要特性
 
@@ -368,10 +382,30 @@ jobs:
 
 MIT License
 
+## ❓ 常见问题
+
+### Q: file_mapping.json 文件是什么？
+A: 这是工具自动生成的映射文件，用于跟踪 Notion 页面 ID 和本地文件路径的对应关系。当页面属性变化导致文件位置改变时，工具会自动清理旧位置的文件。
+
+### Q: 支持哪些 Notion 属性类型？
+A: 支持所有常见属性类型，包括：select、multi_select、status、checkbox、rich_text、number、date 等。
+
+### Q: 如何处理大量数据？
+A: 工具内置智能缓存机制，只同步有变更的内容。首次同步可能较慢，后续增量同步会很快。
+
 ## 🙏 致谢
 
-感谢Notion和GitHub提供的优秀API服务。
+感谢 Notion 和 GitHub 提供的优秀 API 服务。
+
+## 📞 联系
+
+如有问题或建议，欢迎：
+- 提交 [Issue](../../issues)
+- 发起 [Pull Request](../../pulls)
+- 在 [Discussions](../../discussions) 中讨论
 
 ---
 
-**💡 提示**：首次使用建议先运行`analyze_databases.py`来了解你的数据库结构，然后根据分析结果调整配置。 
+**💡 提示**：首次使用建议先运行 `analyze_databases.py` 来了解你的数据库结构，然后根据分析结果调整配置。
+
+**⭐ 如果这个项目对你有帮助，请给个 Star 支持一下！** 
