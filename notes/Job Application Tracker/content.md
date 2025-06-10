@@ -20,9 +20,14 @@
 
 ### 📋 Applications
 
-> **嵌入数据库**: Applications  
-> **数据库ID**: `20c685b0-888a-8098-bc8e-fb2bbfc031d6`  
-> **说明**: 此处嵌入了一个Notion数据库，数据库内容已同步到 `Applications/` 文件夹
+| 标题 | Position | Stage | Link |
+| --- | --- | --- | --- |
+| - | Creative Designer | Offer | - |
+| - | Product Designer | To apply | - |
+| - | Product Designer | To apply | - |
+| - | UX Designer | Applied | - |
+
+> **说明**: 此数据库内容已同步到 `Applications/` 文件夹，每行数据对应一个独立的markdown文件
 
 
 
