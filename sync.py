@@ -556,7 +556,16 @@ def convert_block_to_markdown(block):
     elif block_type == 'code' and 'code' in block:
         text = extract_text_from_rich_text(block['code'].get('rich_text', []))
         language = block['code'].get('language', '')
-        return f"```{language}\n{text}\n```\n\n"
+        caption = extract_text_from_rich_text(block['code'].get('caption', []))
+        
+        # 构建代码块
+        code_block = f"```{language}\n{text}\n```"
+        
+        # 如果有标题，添加到代码块下面作为说明
+        if caption:
+            code_block += f"\n*{caption}*"
+        
+        return code_block + "\n\n"
 
     elif block_type == 'quote' and 'quote' in block:
         text = extract_text_from_rich_text(block['quote'].get('rich_text', []))
