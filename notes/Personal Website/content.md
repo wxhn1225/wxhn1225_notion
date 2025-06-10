@@ -4,16 +4,21 @@
 
 **创建时间**: 2025-06-08T12:35:00.000Z
 
-**最后编辑**: 2025-06-08T12:36:00.000Z
+**最后编辑**: 2025-06-10T05:44:00.000Z
 
 ---
 
 
 
-# 🌈 About Me
+# 🌈 学习方法
 
-I'm a creative thinker, a problem solver, and an avid learner, always exploring new trends and techniques in design. When I'm not pushing pixels, you can find me with a sketchbook, capturing the world or lost in the pages of a good design book.
+### 资料查找、疑问解答
 
+- 搜索引擎：Bing、百度
+- 视频网站：B站、Youtube
+- 博客网站：知乎、CSDN
+- Github
+- LLM：Deepseek、Claude、Chatgpt
 # 💼 Experience
 
 ### Senior UX/UI Designer - Creative Minds Inc. | June 2018 - Present
