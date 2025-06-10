@@ -30,15 +30,15 @@
 
 | 开发 | 环境 |
 | --- | --- |
-| Remote | Termius、Xshell、Xftp |
-| Java | IDEA |
-| Git | Git、Github Desktop |
-| Docker | Docker Desktop |
-| Linux | WSL2（Ubuntu） |
-| Go | GoLand |
-| 通用IDE | VSCode、Cursor |
-| C++ | CLion、VS、MinGW-win64... |
 | Python | PyCharm、Anaconda |
+| C++ | CLion、VS、MinGW-win64... |
+| 通用IDE | VSCode、Cursor |
+| Go | GoLand |
+| Linux | WSL2（Ubuntu） |
+| Docker | Docker Desktop |
+| Git | Git、Github Desktop |
+| Java | IDEA |
+| Remote | Termius、Xshell、Xftp |
 
 > **说明**: 此数据库内容已同步到 `环境安装/` 文件夹，每行数据对应一个独立的markdown文件
 
