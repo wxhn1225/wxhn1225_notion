@@ -18,6 +18,12 @@
 
 ↓ Move your applications along the status pipeline
 
+### 📋 Applications
+
+> **嵌入数据库**: Applications  
+> **数据库ID**: `20c685b0-888a-8098-bc8e-fb2bbfc031d6`  
+> **说明**: 此处嵌入了一个Notion数据库，数据库内容已同步到 `Applications/` 文件夹
+
 
 
 ## Action items
