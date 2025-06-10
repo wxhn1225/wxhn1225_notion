@@ -95,8 +95,6 @@
 ## 文档
 
 - https://typora.io/
-**Typora无限试用**
-
 ```shell
 @echo off
 setlocal enabledelayedexpansion
@@ -116,6 +114,7 @@ reg add "HKEY_CURRENT_USER\Software\Typora" /v IDate /t REG_SZ /d "!date!" /f > 
  
 endlocal
 ```
+*Typora无限试用*
 
 - https://www.wps.cn/
 
