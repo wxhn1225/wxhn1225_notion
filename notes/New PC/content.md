@@ -95,6 +95,8 @@
 ## 文档
 
 - https://typora.io/
+**Typora无限试用**
+
 ```shell
 @echo off
 setlocal enabledelayedexpansion
