@@ -649,13 +649,13 @@ def convert_database_to_table(database_id, database_title):
             
             # 按重要性添加其他属性
             for prop_name in important_props:
-                if prop_name in properties and prop_name != title_prop and len(headers) < 4:
+                if prop_name in properties and prop_name != title_prop:
                     headers.append(prop_name)
                     prop_keys.append(prop_name)
             
-            # 如果还有空间，添加剩余属性
+            # 添加剩余属性（移除列数限制）
             for prop_name, prop_data in properties.items():
-                if prop_name not in prop_keys and len(headers) < 4:
+                if prop_name not in prop_keys:
                     headers.append(prop_name)
                     prop_keys.append(prop_name)
         
@@ -685,9 +685,7 @@ def convert_database_to_table(database_id, database_title):
                     else:
                         cell_value = str(value)
                     
-                    # 限制单元格长度
-                    if len(cell_value) > 20:
-                        cell_value = cell_value[:20] + '...'
+                    # 不限制单元格长度，显示完整内容
                     
                     # 转义markdown特殊字符
                     cell_value = cell_value.replace('|', '\\|').replace('\n', ' ')
