@@ -22,10 +22,10 @@
 
 | 标题 | Position | Stage | Link |
 | --- | --- | --- | --- |
-| - | Creative Designer | Offer | - |
-| - | Product Designer | To apply | - |
-| - | Product Designer | To apply | - |
-| - | UX Designer | Applied | - |
+| - | Creative Designer | Offer | https://www.lever.co... |
+| - | Product Designer | To apply | https://www.lever.co... |
+| - | Product Designer | To apply | https://www.lever.co... |
+| - | UX Designer | Applied | https://www.lever.co... |
 
 > **说明**: 此数据库内容已同步到 `Applications/` 文件夹，每行数据对应一个独立的markdown文件
 
