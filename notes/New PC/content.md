@@ -32,7 +32,7 @@
 | --- | --- |
 | 通用IDE | VSCode、Cursor |
 | Python | PyCharm、Anaconda |
-| C++ | CLion、VS、MinGW-win64... |
+| C++ | CLion、VS、MinGW-win64、CMake |
 | Go | GoLand |
 | Linux | WSL2（Ubuntu） |
 | Docker | Docker Desktop |
