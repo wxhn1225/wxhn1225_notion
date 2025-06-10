@@ -5,9 +5,25 @@ import base64
 import hashlib
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from functools import lru_cache
+import time
 
 # 加载环境变量
 load_dotenv()
+
+# 全局会话对象，用于连接复用
+notion_session = requests.Session()
+github_session = requests.Session()
+
+# 线程锁
+print_lock = threading.Lock()
+
+def safe_print(*args, **kwargs):
+    """线程安全的打印函数"""
+    with print_lock:
+        print(*args, **kwargs)
 
 NOTION_API_KEY = os.getenv('NOTION_API_KEY')
 # 支持多个数据库ID（优先使用NOTION_DATABASE_IDS）
@@ -36,6 +52,120 @@ pending_files = []
 # 文件位置映射表文件
 MAPPING_FILE = 'file_mapping.json'
 
+# 设置会话Headers
+def setup_sessions():
+    """设置全局会话的默认headers"""
+    notion_session.headers.update({
+        'Authorization': f'Bearer {NOTION_API_KEY}',
+        'Content-Type': 'application/json',
+        'Notion-Version': '2022-06-28'
+    })
+    
+    github_session.headers.update({
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    })
+
+# 缓存装饰器
+@lru_cache(maxsize=1000)
+def cached_get_page_info(page_id):
+    """缓存的页面信息获取"""
+    return get_page_info_direct(page_id)
+
+def get_page_info_direct(page_id):
+    """直接获取页面信息（不使用缓存）"""
+    url = f'https://api.notion.com/v1/pages/{page_id}'
+    try:
+        response = notion_session.get(url)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        safe_print(f"获取页面 {page_id} 信息时出错: {e}")
+        return None
+
+def process_page_parallel(page_data, database_title, parent_title, file_mapping):
+    """并行处理单个页面"""
+    try:
+        page_id = page_data['id']
+        
+        # 获取页面属性
+        page_properties = get_page_properties(page_data)
+        
+        # 生成文件名
+        title = get_page_title(page_data)
+        if not title:
+            title = f"页面_{page_id}"
+        
+        # 生成文件夹路径
+        folder_path = generate_folder_path(database_title, page_properties, parent_title)
+        
+        # 获取页面内容
+        content_data = get_page_content(page_id)
+        
+        # 转换为Markdown
+        source_info = f"数据库: {database_title}"
+        markdown_content = convert_notion_to_markdown(page_data, content_data, source_info)
+        
+        # 生成文件名
+        filename = clean_filename(title)
+        new_file_path = f"{GITHUB_PATH}/{folder_path}/{filename}.md"
+        
+        # 检查是否需要删除旧位置的文件
+        if page_id in file_mapping:
+            old_file_path = file_mapping[page_id]
+            if old_file_path != new_file_path:
+                safe_print(f"🔄 检测到文件位置变更: {page_id}")
+                safe_print(f"   旧位置: {old_file_path}")
+                safe_print(f"   新位置: {new_file_path}")
+                # 删除旧位置的文件
+                delete_github_file(old_file_path)
+        
+        # 更新映射表
+        file_mapping[page_id] = new_file_path
+        
+        return {
+            'success': True,
+            'page_id': page_id,
+            'title': title,
+            'folder_path': folder_path,
+            'filename': filename,
+            'content': markdown_content,
+            'new_file_path': new_file_path
+        }
+    except Exception as e:
+        safe_print(f"处理页面 {page_data.get('id', 'unknown')} 时出错: {e}")
+        return {'success': False, 'error': str(e)}
+
+def batch_check_github_files(file_paths):
+    """批量检查GitHub文件是否存在和内容"""
+    results = {}
+    
+    def check_single_file(file_path):
+        try:
+            url = f'https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{file_path}'
+            response = github_session.get(url)
+            if response.status_code == 200:
+                existing_data = response.json()
+                existing_content = base64.b64decode(existing_data['content']).decode('utf-8')
+                return file_path, {
+                    'sha': existing_data['sha'],
+                    'content': existing_content,
+                    'exists': True
+                }
+            else:
+                return file_path, {'exists': False}
+        except Exception as e:
+            return file_path, {'exists': False, 'error': str(e)}
+    
+    # 并行检查文件
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_path = {executor.submit(check_single_file, path): path for path in file_paths}
+        for future in as_completed(future_to_path):
+            file_path, result = future.result()
+            results[file_path] = result
+    
+    return results
+
 
 def load_file_mapping():
     """加载文件位置映射表"""
@@ -45,7 +175,7 @@ def load_file_mapping():
                 return json.load(f)
         return {}
     except Exception as e:
-        print(f"⚠️ 加载文件映射表时出错: {e}")
+        safe_print(f"⚠️ 加载文件映射表时出错: {e}")
         return {}
 
 
@@ -55,7 +185,7 @@ def save_file_mapping(mapping):
         with open(MAPPING_FILE, 'w', encoding='utf-8') as f:
             json.dump(mapping, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"⚠️ 保存文件映射表时出错: {e}")
+        safe_print(f"⚠️ 保存文件映射表时出错: {e}")
 
 
 def delete_github_file(file_path):
@@ -82,16 +212,16 @@ def delete_github_file(file_path):
 
             delete_response = requests.delete(url, headers=headers, json=delete_data)
             if delete_response.status_code == 200:
-                print(f"🗑️ 已删除旧文件: {file_path}")
+                safe_print(f"🗑️ 已删除旧文件: {file_path}")
                 return True
             else:
-                print(f"⚠️ 删除文件失败: {file_path} - {delete_response.status_code}")
+                safe_print(f"⚠️ 删除文件失败: {file_path} - {delete_response.status_code}")
         else:
-            print(f"📝 文件不存在，无需删除: {file_path}")
+            safe_print(f"📝 文件不存在，无需删除: {file_path}")
         
         return False
     except Exception as e:
-        print(f"⚠️ 删除文件时出错: {file_path} - {e}")
+        safe_print(f"⚠️ 删除文件时出错: {file_path} - {e}")
         return False
 
 
@@ -100,7 +230,7 @@ def clean_deleted_pages(file_mapping):
     if not file_mapping:
         return
 
-    print(f"\n🧹 检查已删除的页面...")
+    safe_print(f"\n🧹 检查已删除的页面...")
     
     # 获取当前同步中处理过的页面ID
     current_session_pages = set()
@@ -111,7 +241,7 @@ def clean_deleted_pages(file_mapping):
     # TODO: 在后续版本中添加更完善的清理机制
     # 目前只清理位置变更的文件，已删除页面的清理将在后续版本中实现
     
-    print(f"✅ 清理检查完成")
+    safe_print(f"✅ 清理检查完成")
 
 
 def get_database_ids():
@@ -163,7 +293,7 @@ def search_all_pages():
             start_cursor = result.get('next_cursor')
 
         except requests.exceptions.RequestException as e:
-            print(f"搜索页面时出错: {e}")
+            safe_print(f"搜索页面时出错: {e}")
             break
 
     return all_pages
@@ -171,35 +301,23 @@ def search_all_pages():
 
 def get_page_info(page_id):
     """获取页面信息"""
-    headers = {
-        'Authorization': f'Bearer {NOTION_API_KEY}',
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28'
-    }
-
     url = f'https://api.notion.com/v1/pages/{page_id}'
 
     try:
-        response = requests.get(url, headers=headers)
+        response = notion_session.get(url)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"获取页面 {page_id} 信息时出错: {e}")
+        safe_print(f"获取页面 {page_id} 信息时出错: {e}")
         return None
 
 
 def get_database_info(database_id):
     """获取数据库信息（包括名称和父页面关系）"""
-    headers = {
-        'Authorization': f'Bearer {NOTION_API_KEY}',
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28'
-    }
-
     url = f'https://api.notion.com/v1/databases/{database_id}'
 
     try:
-        response = requests.get(url, headers=headers)
+        response = notion_session.get(url)
         response.raise_for_status()
         db_data = response.json()
 
@@ -226,7 +344,7 @@ def get_database_info(database_id):
             'data': db_data
         }
     except requests.exceptions.RequestException as e:
-        print(f"获取数据库 {database_id} 信息时出错: {e}")
+        safe_print(f"获取数据库 {database_id} 信息时出错: {e}")
         return {
             'id': database_id,
             'title': f"数据库_{database_id[:8]}",
@@ -341,39 +459,27 @@ def generate_date_category(date_value):
 
 def fetch_notion_notes(database_id):
     """获取指定Notion数据库中的笔记"""
-    headers = {
-        'Authorization': f'Bearer {NOTION_API_KEY}',
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28'
-    }
-
     url = f'https://api.notion.com/v1/databases/{database_id}/query'
 
     try:
-        response = requests.post(url, headers=headers)
+        response = notion_session.post(url)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"获取数据库 {database_id} 的笔记时出错: {e}")
+        safe_print(f"获取数据库 {database_id} 的笔记时出错: {e}")
         return None
 
 
 def get_page_content(page_id):
     """获取页面的具体内容"""
-    headers = {
-        'Authorization': f'Bearer {NOTION_API_KEY}',
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28'
-    }
-
     url = f'https://api.notion.com/v1/blocks/{page_id}/children'
 
     try:
-        response = requests.get(url, headers=headers)
+        response = notion_session.get(url)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"获取页面内容时出错: {e}")
+        safe_print(f"获取页面内容时出错: {e}")
         return None
 
 
@@ -707,7 +813,7 @@ def convert_database_to_table(database_id, database_title):
         return '\n'.join(table_lines)
         
     except Exception as e:
-        print(f"⚠️ 转换数据库表格时出错: {e}")
+        safe_print(f"⚠️ 转换数据库表格时出错: {e}")
         return f"*转换数据库 {database_title} 为表格时出错*"
 
 
@@ -718,15 +824,10 @@ def get_file_content_hash(content):
 
 def get_existing_file_info(file_path):
     """获取GitHub上现有文件的信息"""
-    headers = {
-        'Authorization': f'token {GITHUB_TOKEN}',
-        'Accept': 'application/vnd.github.v3+json'
-    }
-
     url = f'https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{file_path}'
 
     try:
-        response = requests.get(url, headers=headers)
+        response = github_session.get(url)
         if response.status_code == 200:
             existing_data = response.json()
             # 解码现有文件内容
@@ -771,7 +872,7 @@ def add_file_to_batch(folder_name, filename, content):
             'is_new': not existing_info['exists']
         }
         pending_files.append(file_info)
-        print(f"📝 待更新: {folder_name}/{filename}.md")
+        safe_print(f"📝 待更新: {folder_name}/{filename}.md")
         return True
     else:
         return False
@@ -780,10 +881,10 @@ def add_file_to_batch(folder_name, filename, content):
 def commit_files_batch():
     """批量提交所有待更新的文件 - 单次提交"""
     if not pending_files:
-        print("📄 没有文件需要更新")
+        safe_print("📄 没有文件需要更新")
         return 0
 
-    print(f"\n🚀 开始单次批量提交 {len(pending_files)} 个文件...")
+    safe_print(f"\n🚀 开始单次批量提交 {len(pending_files)} 个文件...")
 
     headers = {
         'Authorization': f'token {GITHUB_TOKEN}',
@@ -796,10 +897,10 @@ def commit_files_batch():
         repo_response = requests.get(repo_url, headers=headers)
         repo_response.raise_for_status()
         default_branch = repo_response.json()['default_branch']
-        print(f"🌿 检测到默认分支: {default_branch}")
+        safe_print(f"🌿 检测到默认分支: {default_branch}")
     except Exception as e:
-        print(f"⚠️ 无法获取仓库信息: {e}")
-        print(f"🔄 回退到兼容模式...")
+        safe_print(f"⚠️ 无法获取仓库信息: {e}")
+        safe_print(f"🔄 回退到兼容模式...")
         return commit_files_individually()
 
     try:
@@ -808,14 +909,14 @@ def commit_files_batch():
         ref_response = requests.get(ref_url, headers=headers)
         ref_response.raise_for_status()
         base_commit_sha = ref_response.json()['object']['sha']
-        print(f"📍 当前分支最新commit: {base_commit_sha[:8]}")
+        safe_print(f"📍 当前分支最新commit: {base_commit_sha[:8]}")
 
         # 2. 获取基础tree
         commit_url = f'https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/git/commits/{base_commit_sha}'
         commit_response = requests.get(commit_url, headers=headers)
         commit_response.raise_for_status()
         base_tree_sha = commit_response.json()['tree']['sha']
-        print(f"📁 基础tree: {base_tree_sha[:8]}")
+        safe_print(f"📁 基础tree: {base_tree_sha[:8]}")
 
         # 3. 准备tree entries
         tree_entries = []
@@ -847,7 +948,7 @@ def commit_files_batch():
             else:
                 updated_files.append(file_info)
 
-        print(f"📦 创建了 {len(tree_entries)} 个blob对象")
+        safe_print(f"📦 创建了 {len(tree_entries)} 个blob对象")
 
         # 4. 创建新tree
         tree_data = {
@@ -859,7 +960,7 @@ def commit_files_batch():
         tree_response = requests.post(tree_url, headers=headers, json=tree_data)
         tree_response.raise_for_status()
         new_tree_sha = tree_response.json()['sha']
-        print(f"🌳 创建新tree: {new_tree_sha[:8]}")
+        safe_print(f"�� 创建新tree: {new_tree_sha[:8]}")
 
         # 5. 生成commit message
         commit_message = f"🔄 Notion同步 - 批量更新 {len(pending_files)} 个文件"
@@ -885,7 +986,7 @@ def commit_files_batch():
         commit_create_response = requests.post(commit_create_url, headers=headers, json=commit_data)
         commit_create_response.raise_for_status()
         new_commit_sha = commit_create_response.json()['sha']
-        print(f"💾 创建新commit: {new_commit_sha[:8]}")
+        safe_print(f"💾 创建新commit: {new_commit_sha[:8]}")
 
         # 7. 更新分支引用
         ref_update_data = {
@@ -894,20 +995,20 @@ def commit_files_batch():
 
         ref_update_response = requests.patch(ref_url, headers=headers, json=ref_update_data)
         ref_update_response.raise_for_status()
-        print(f"🎯 更新分支引用成功")
+        safe_print(f"🎯 更新分支引用成功")
 
-        print(f"✅ 单次批量提交完成! 成功提交 {len(pending_files)} 个文件到一个commit中")
+        safe_print(f"✅ 单次批量提交完成! 成功提交 {len(pending_files)} 个文件到一个commit中")
         return len(pending_files)
 
     except Exception as e:
-        print(f"❌ 单次批量提交失败: {e}")
-        print(f"🔄 回退到兼容模式...")
+        safe_print(f"❌ 单次批量提交失败: {e}")
+        safe_print(f"🔄 回退到兼容模式...")
         return commit_files_individually()
 
 
 def commit_files_individually():
     """单个文件提交（备用方案）"""
-    print("🔄 使用兼容模式（每个文件单独提交）...")
+    safe_print("🔄 使用兼容模式（每个文件单独提交）...")
 
     success_count = 0
     headers = {
@@ -947,13 +1048,13 @@ def commit_files_individually():
         try:
             response = requests.put(url, headers=headers, json=data)
             response.raise_for_status()
-            print(f"✅ 单独提交: {file_info['folder_name']}/{file_info['filename']}.md")
+            safe_print(f"✅ 单独提交: {file_info['folder_name']}/{file_info['filename']}.md")
             success_count += 1
         except requests.exceptions.RequestException as e:
             if "409" in str(e):
-                print(f"⚠️ 文件冲突，跳过: {file_info['folder_name']}/{file_info['filename']}.md")
+                safe_print(f"⚠️ 文件冲突，跳过: {file_info['folder_name']}/{file_info['filename']}.md")
             else:
-                print(f"❌ 提交失败: {file_info['folder_name']}/{file_info['filename']}.md - {e}")
+                safe_print(f"❌ 提交失败: {file_info['folder_name']}/{file_info['filename']}.md - {e}")
 
     return success_count
 
@@ -979,90 +1080,86 @@ def clean_filename(filename):
 
 
 def process_database(database_info, db_index, total_dbs, file_mapping, database_page_ids=None):
-    """处理单个数据库"""
+    """处理单个数据库 - 优化版本"""
     database_id = database_info['id']
     database_title = database_info['title']
     parent_title = database_info.get('parent_title')
 
-    print(f"\n📚 正在处理数据库 {db_index}/{total_dbs}: {database_title}")
+    safe_print(f"\n📚 正在处理数据库 {db_index}/{total_dbs}: {database_title}")
     if parent_title:
-        print(f"   🔗 父页面: {parent_title}")
+        safe_print(f"   🔗 父页面: {parent_title}")
 
     # 获取数据库中的笔记
     notes_data = fetch_notion_notes(database_id)
     if not notes_data:
-        print(f"❌ 无法获取数据库 {database_id} 的笔记")
+        safe_print(f"❌ 无法获取数据库 {database_id} 的笔记")
         return 0
 
     # 处理每个页面
     pages = notes_data.get('results', [])
-    print(f"📄 找到 {len(pages)} 个页面")
+    safe_print(f"📄 找到 {len(pages)} 个页面，开始并行处理...")
 
+    # 收集页面ID用于独立页面去重
+    if database_page_ids is not None:
+        for page in pages:
+            database_page_ids.add(page['id'])
+
+    # 并行处理页面
     processed_count = 0
-    folder_stats = {}  # 统计各个文件夹的文件数量
+    folder_stats = {}
+    successful_results = []
     
-    for page in pages:
-        page_id = page['id']
+    # 限制并发数，避免API限流
+    max_workers = min(8, len(pages))
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
+        future_to_page = {
+            executor.submit(process_page_parallel, page, database_title, parent_title, file_mapping): page 
+            for page in pages
+        }
         
-        # 收集页面ID用于独立页面去重
-        if database_page_ids is not None:
-            database_page_ids.add(page_id)
+        # 收集结果
+        for future in as_completed(future_to_page):
+            result = future.result()
+            if result['success']:
+                successful_results.append(result)
+                
+                # 统计文件夹
+                folder_path = result['folder_path']
+                if folder_path not in folder_stats:
+                    folder_stats[folder_path] = 0
+                folder_stats[folder_path] += 1
+                
+                safe_print(f"   📄 {result['title']} -> {folder_path}")
+            else:
+                safe_print(f"   ❌ 处理页面失败: {result.get('error', '未知错误')}")
 
-        # 获取页面属性
-        page_properties = get_page_properties(page)
-        
-        # 生成文件名
-        title = get_page_title(page)
-        if not title:
-            title = f"页面_{page_id}"
-        
-        # 生成文件夹路径（传入父页面标题）
-        folder_path = generate_folder_path(database_title, page_properties, parent_title)
-        
-        # 统计文件夹
-        if folder_path not in folder_stats:
-            folder_stats[folder_path] = 0
-        folder_stats[folder_path] += 1
-
-        # 获取页面内容
-        content_data = get_page_content(page_id)
-
-        # 转换为Markdown
-        source_info = f"数据库: {database_title}"
-        markdown_content = convert_notion_to_markdown(page, content_data, source_info)
-
-        # 生成文件名（title已经在前面获取了）
-        filename = clean_filename(title)
-        new_file_path = f"{GITHUB_PATH}/{folder_path}/{filename}.md"
-
-        # 检查是否需要删除旧位置的文件
-        if page_id in file_mapping:
-            old_file_path = file_mapping[page_id]
-            if old_file_path != new_file_path:
-                print(f"🔄 检测到文件位置变更: {page_id}")
-                print(f"   旧位置: {old_file_path}")
-                print(f"   新位置: {new_file_path}")
-                # 删除旧位置的文件
-                delete_github_file(old_file_path)
-
-        # 更新映射表
-        file_mapping[page_id] = new_file_path
-
-        # 添加到批量提交列表或立即保存
+    # 批量处理文件
+    if successful_results:
         if BATCH_COMMIT:
-            if add_file_to_batch(folder_path, filename, markdown_content):
-                print(f"   📄 {title} -> {folder_path}")
-                processed_count += 1
+            # 先批量检查文件状态
+            file_paths = [r['new_file_path'] for r in successful_results]
+            existing_files = batch_check_github_files(file_paths)
+            
+            for result in successful_results:
+                file_path = result['new_file_path']
+                existing_info = existing_files.get(file_path, {'exists': False})
+                
+                if should_update_file(result['content'], existing_info):
+                    if add_file_to_batch(result['folder_path'], result['filename'], result['content']):
+                        processed_count += 1
         else:
-            if save_to_github_immediate(folder_path, filename, markdown_content):
-                print(f"   📄 {title} -> {folder_path}")
-                processed_count += 1
+            # 串行保存（如果不使用批量提交）
+            for result in successful_results:
+                if save_to_github_immediate(result['folder_path'], result['filename'], result['content']):
+                    processed_count += 1
 
     # 显示统计
     if folder_stats:
-        print(f"   📁 {len(folder_stats)} 个文件夹，{processed_count}/{len(pages)} 个页面需要同步")
+        safe_print(f"   📁 {len(folder_stats)} 个文件夹，{processed_count}/{len(pages)} 个页面需要同步")
     else:
-        print(f"   ✅ {processed_count}/{len(pages)} 个页面需要同步")
+        safe_print(f"   ✅ {processed_count}/{len(pages)} 个页面需要同步")
     return processed_count
 
 
@@ -1103,20 +1200,20 @@ def save_to_github_immediate(folder_name, filename, content):
     try:
         response = requests.put(url, headers=headers, json=data)
         response.raise_for_status()
-        print(f"✅ 成功保存文件: {folder_name}/{filename}.md")
+        safe_print(f"✅ 成功保存文件: {folder_name}/{filename}.md")
         return True
     except requests.exceptions.RequestException as e:
-        print(f"❌ 保存到GitHub时出错: {e}")
+        safe_print(f"❌ 保存到GitHub时出错: {e}")
         return False
 
 
 def process_standalone_pages(file_mapping, database_page_ids=None):
     """处理独立页面（不在数据库中的页面）"""
-    print(f"\n📄 正在搜索所有独立页面...")
+    safe_print(f"\n📄 正在搜索所有独立页面...")
 
     # 获取所有页面
     all_pages = search_all_pages()
-    print(f"🔍 找到 {len(all_pages)} 个页面")
+    safe_print(f"🔍 找到 {len(all_pages)} 个页面")
 
     # 如果没有传入数据库页面ID，则获取
     if database_page_ids is None:
@@ -1128,7 +1225,7 @@ def process_standalone_pages(file_mapping, database_page_ids=None):
                 for page in notes_data['results']:
                     database_page_ids.add(page['id'])
 
-    print(f"🗂️ 数据库中共有 {len(database_page_ids)} 个页面")
+    safe_print(f"🗂️ 数据库中共有 {len(database_page_ids)} 个页面")
 
     # 过滤出真正的独立页面
     standalone_pages = []
@@ -1148,10 +1245,10 @@ def process_standalone_pages(file_mapping, database_page_ids=None):
         ):
             standalone_pages.append(page)
 
-    print(f"📑 找到 {len(standalone_pages)} 个真正的独立页面")
+    safe_print(f"📑 找到 {len(standalone_pages)} 个真正的独立页面")
 
     if not standalone_pages:
-        print("✅ 没有找到独立页面")
+        safe_print("✅ 没有找到独立页面")
         return 0
 
     # 处理独立页面
@@ -1191,9 +1288,9 @@ def process_standalone_pages(file_mapping, database_page_ids=None):
         if page_id in file_mapping:
             old_file_path = file_mapping[page_id]
             if old_file_path != new_file_path:
-                print(f"🔄 检测到独立页面位置变更: {page_id}")
-                print(f"   旧位置: {old_file_path}")
-                print(f"   新位置: {new_file_path}")
+                safe_print(f"🔄 检测到独立页面位置变更: {page_id}")
+                safe_print(f"   旧位置: {old_file_path}")
+                safe_print(f"   新位置: {new_file_path}")
                 # 删除旧位置的文件
                 delete_github_file(old_file_path)
 
@@ -1203,18 +1300,18 @@ def process_standalone_pages(file_mapping, database_page_ids=None):
         # 添加到批量提交列表或立即保存
         if BATCH_COMMIT:
             if add_file_to_batch(page_folder, filename, markdown_content):
-                print(f"   📄 {title} -> {page_folder}")
+                safe_print(f"   📄 {title} -> {page_folder}")
                 processed_count += 1
         else:
             if save_to_github_immediate(page_folder, filename, markdown_content):
-                print(f"   📄 {title} -> {page_folder}")
+                safe_print(f"   📄 {title} -> {page_folder}")
                 processed_count += 1
     
     # 显示统计
     if folder_stats:
-        print(f"   📁 {len(folder_stats)} 个文件夹，{processed_count}/{len(standalone_pages)} 个页面需要同步")
+        safe_print(f"   📁 {len(folder_stats)} 个文件夹，{processed_count}/{len(standalone_pages)} 个页面需要同步")
     else:
-        print(f"   ✅ {processed_count}/{len(standalone_pages)} 个页面需要同步")
+        safe_print(f"   ✅ {processed_count}/{len(standalone_pages)} 个页面需要同步")
     return processed_count
 
 
@@ -1230,31 +1327,31 @@ def check_github_repo_status():
     try:
         repo_response = requests.get(repo_url, headers=headers)
         if repo_response.status_code == 404:
-            print(f"❌ 仓库不存在: {GITHUB_OWNER}/{GITHUB_REPO}")
-            print(f"💡 请确认：")
-            print(f"   - GITHUB_OWNER: {GITHUB_OWNER}")
-            print(f"   - GITHUB_REPO: {GITHUB_REPO}")
-            print(f"   - 仓库是否存在且有权限访问")
+            safe_print(f"❌ 仓库不存在: {GITHUB_OWNER}/{GITHUB_REPO}")
+            safe_print(f"💡 请确认：")
+            safe_print(f"   - GITHUB_OWNER: {GITHUB_OWNER}")
+            safe_print(f"   - GITHUB_REPO: {GITHUB_REPO}")
+            safe_print(f"   - 仓库是否存在且有权限访问")
             return False
         repo_response.raise_for_status()
 
         repo_data = repo_response.json()
         default_branch = repo_data['default_branch']
 
-        print(f"✅ 仓库检查通过: {GITHUB_OWNER}/{GITHUB_REPO}")
-        print(f"🌿 默认分支: {default_branch}")
-        print(f"🔒 仓库类型: {'私有' if repo_data['private'] else '公开'}")
+        safe_print(f"✅ 仓库检查通过: {GITHUB_OWNER}/{GITHUB_REPO}")
+        safe_print(f"🌿 默认分支: {default_branch}")
+        safe_print(f"🔒 仓库类型: {'私有' if repo_data['private'] else '公开'}")
 
         return True
 
     except requests.exceptions.RequestException as e:
         if "401" in str(e):
-            print(f"❌ GitHub Token权限不足")
-            print(f"💡 请检查：")
-            print(f"   - GITHUB_TOKEN是否正确")
-            print(f"   - Token是否有仓库访问权限")
+            safe_print(f"❌ GitHub Token权限不足")
+            safe_print(f"💡 请检查：")
+            safe_print(f"   - GITHUB_TOKEN是否正确")
+            safe_print(f"   - Token是否有仓库访问权限")
         else:
-            print(f"❌ 仓库检查失败: {e}")
+            safe_print(f"❌ 仓库检查失败: {e}")
         return False
 
 
@@ -1262,32 +1359,40 @@ def sync_notion_to_github():
     """主同步函数"""
     global pending_files
     pending_files = []  # 重置待提交文件列表
+    
+    # 开始计时
+    start_time = time.time()
 
-    print("🚀 开始同步Notion内容到GitHub...")
-    print(f"🔧 同步模式: {SYNC_MODE}")
-    print(f"📦 批量提交: {'开启' if BATCH_COMMIT else '关闭'}")
-    print(f"🚫 跳过提交: {'是' if SKIP_COMMIT else '否'}")
-    print(f"📂 文件夹分类: {'开启' if ENABLE_CATEGORIZATION else '关闭'}")
+    safe_print("🚀 开始同步Notion内容到GitHub...")
+    safe_print(f"🔧 同步模式: {SYNC_MODE}")
+    safe_print(f"📦 批量提交: {'开启' if BATCH_COMMIT else '关闭'}")
+    safe_print(f"🚫 跳过提交: {'是' if SKIP_COMMIT else '否'}")
+    safe_print(f"📂 文件夹分类: {'开启' if ENABLE_CATEGORIZATION else '关闭'}")
+    safe_print(f"⚡ 并行处理: 已启用 (最大8个并发)")
     if ENABLE_CATEGORIZATION:
-        print(f"🏷️ 分类属性: {', '.join(CATEGORY_PROPERTIES)}")
+        safe_print(f"🏷️ 分类属性: {', '.join(CATEGORY_PROPERTIES)}")
     else:
-        print("⚠️ 文件夹分类已禁用，所有文件将放在数据库同名文件夹下")
+        safe_print("⚠️ 文件夹分类已禁用，所有文件将放在数据库同名文件夹下")
 
     # 检查必要的环境变量
     if not all([NOTION_API_KEY, GITHUB_TOKEN, GITHUB_REPO, GITHUB_OWNER]):
-        print("❌ 错误: 缺少必要的环境变量")
+        safe_print("❌ 错误: 缺少必要的环境变量")
         return
 
+    # 初始化会话
+    safe_print("🔧 初始化网络会话...")
+    setup_sessions()
+
     # 检查GitHub仓库状态
-    print(f"\n🔍 检查GitHub仓库状态...")
+    safe_print(f"\n🔍 检查GitHub仓库状态...")
     if not check_github_repo_status():
-        print("❌ GitHub仓库检查失败，请检查配置后重试")
+        safe_print("❌ GitHub仓库检查失败，请检查配置后重试")
         return
 
     # 加载文件位置映射表
-    print(f"📋 加载文件位置映射表...")
+    safe_print(f"📋 加载文件位置映射表...")
     file_mapping = load_file_mapping()
-    print(f"📊 当前跟踪 {len(file_mapping)} 个文件位置")
+    safe_print(f"📊 当前跟踪 {len(file_mapping)} 个文件位置")
 
     total_processed = 0
     database_page_ids = set()  # 收集数据库页面ID，用于独立页面去重
@@ -1297,22 +1402,22 @@ def sync_notion_to_github():
         database_ids = get_database_ids()
 
         if database_ids:
-            print(f"\n📊 找到 {len(database_ids)} 个数据库要同步")
+            safe_print(f"\n📊 找到 {len(database_ids)} 个数据库要同步")
 
             # 获取所有数据库信息
             database_infos = []
             for i, database_id in enumerate(database_ids, 1):
-                print(f"🔍 获取数据库 {i}/{len(database_ids)} 信息...")
+                safe_print(f"🔍 获取数据库 {i}/{len(database_ids)} 信息...")
                 db_info = get_database_info(database_id)
                 database_infos.append(db_info)
-                print(f"  📋 {db_info['title']}")
+                safe_print(f"  📋 {db_info['title']}")
 
             # 处理每个数据库
             for i, database_info in enumerate(database_infos, 1):
                 processed_count = process_database(database_info, i, len(database_infos), file_mapping, database_page_ids)
                 total_processed += processed_count
         else:
-            print("⚠️ 没有配置数据库ID，跳过数据库同步")
+            safe_print("⚠️ 没有配置数据库ID，跳过数据库同步")
 
     # 同步独立页面
     if SYNC_MODE in ['pages', 'all']:
@@ -1323,29 +1428,35 @@ def sync_notion_to_github():
     clean_deleted_pages(file_mapping)
 
     # 保存更新后的文件位置映射表
-    print(f"\n💾 保存文件位置映射表...")
+    safe_print(f"\n💾 保存文件位置映射表...")
     save_file_mapping(file_mapping)
-    print(f"📊 当前跟踪 {len(file_mapping)} 个文件位置")
+    safe_print(f"📊 当前跟踪 {len(file_mapping)} 个文件位置")
 
     # 执行批量提交
     if SKIP_COMMIT:
-        print(f"\n⏭️ 跳过提交步骤，共准备了 {len(pending_files)} 个文件")
-        print(f"💡 如需提交，请设置 SKIP_COMMIT=false 重新运行")
+        safe_print(f"\n⏭️ 跳过提交步骤，共准备了 {len(pending_files)} 个文件")
+        safe_print(f"💡 如需提交，请设置 SKIP_COMMIT=false 重新运行")
     elif BATCH_COMMIT and pending_files:
         committed_count = commit_files_batch()
         if committed_count > 0:
-            print(f"\n🎉 同步完成! 所有 {committed_count} 个文件已合并到一次提交中")
-            print(f"📊 批量提交：{len(pending_files)} 个文件 = 1 个commit")
+            safe_print(f"\n🎉 同步完成! 所有 {committed_count} 个文件已合并到一次提交中")
+            safe_print(f"📊 批量提交：{len(pending_files)} 个文件 = 1 个commit")
         else:
-            print(f"\n❌ 批量提交失败，已使用兼容模式")
+            safe_print(f"\n❌ 批量提交失败，已使用兼容模式")
     elif not BATCH_COMMIT and not SKIP_COMMIT:
         committed_count = commit_files_individually()
-        print(f"\n🎉 同步完成! 使用兼容模式提交了 {committed_count} 个文件")
+        safe_print(f"\n🎉 同步完成! 使用兼容模式提交了 {committed_count} 个文件")
     else:
-        print(f"\n🎉 同步完成! 没有文件需要更新")
+        safe_print(f"\n🎉 同步完成! 没有文件需要更新")
 
-    print(f"📁 文件已保存到GitHub的 {GITHUB_PATH} 文件夹下")
-    print(f"📂 文件夹结构: 数据库文件夹 + 独立页面文件夹")
+    safe_print(f"📁 文件已保存到GitHub的 {GITHUB_PATH} 文件夹下")
+    safe_print(f"📂 文件夹结构: 数据库文件夹 + 独立页面文件夹")
+    
+    # 显示性能统计
+    end_time = time.time()
+    duration = end_time - start_time
+    safe_print(f"\n⏱️ 同步完成，总耗时: {duration:.2f} 秒")
+    safe_print(f"🚀 性能优化已启用：并行处理 + 会话复用 + 批量检查")
 
 
 if __name__ == '__main__':
