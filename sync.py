@@ -27,6 +27,9 @@ SKIP_COMMIT = os.getenv('SKIP_COMMIT', 'false').lower() == 'true'  # 是否跳�
 CATEGORY_PROPERTIES = os.getenv('CATEGORY_PROPERTIES', 'Status,Category,Type,状态,分类,类型,Stage,阶段').split(',')
 ENABLE_CATEGORIZATION = os.getenv('ENABLE_CATEGORIZATION', 'true').lower() == 'true'  # 是否启用分类
 
+# 数据库表格显示配置
+DATABASE_TABLE_PROPERTIES = os.getenv('DATABASE_TABLE_PROPERTIES', '').strip()  # 用户自定义表格属性
+
 # 存储待提交的文件
 pending_files = []
 
@@ -166,8 +169,27 @@ def search_all_pages():
     return all_pages
 
 
+def get_page_info(page_id):
+    """获取页面信息"""
+    headers = {
+        'Authorization': f'Bearer {NOTION_API_KEY}',
+        'Content-Type': 'application/json',
+        'Notion-Version': '2022-06-28'
+    }
+
+    url = f'https://api.notion.com/v1/pages/{page_id}'
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"获取页面 {page_id} 信息时出错: {e}")
+        return None
+
+
 def get_database_info(database_id):
-    """获取数据库信息（包括名称）"""
+    """获取数据库信息（包括名称和父页面关系）"""
     headers = {
         'Authorization': f'Bearer {NOTION_API_KEY}',
         'Content-Type': 'application/json',
@@ -186,11 +208,21 @@ def get_database_info(database_id):
         if 'title' in db_data and db_data['title']:
             db_title = db_data['title'][0]['plain_text']
 
-
+        # 获取父页面信息
+        parent_info = db_data.get('parent', {})
+        parent_title = None
+        
+        if parent_info.get('type') == 'page_id':
+            parent_page_id = parent_info.get('page_id')
+            if parent_page_id:
+                parent_page_data = get_page_info(parent_page_id)
+                if parent_page_data:
+                    parent_title = get_page_title(parent_page_data)
 
         return {
             'id': database_id,
             'title': db_title,
+            'parent_title': parent_title,
             'data': db_data
         }
     except requests.exceptions.RequestException as e:
@@ -198,6 +230,7 @@ def get_database_info(database_id):
         return {
             'id': database_id,
             'title': f"数据库_{database_id[:8]}",
+            'parent_title': None,
             'data': None
         }
 
@@ -381,6 +414,10 @@ def get_page_properties(page_data):
                 properties[prop_name] = '已完成' if prop_data['checkbox'] else '未完成'
             elif prop_type == 'date' and 'date' in prop_data and prop_data['date']:
                 properties[prop_name] = prop_data['date']['start']
+            elif prop_type == 'url' and 'url' in prop_data and prop_data['url']:
+                properties[prop_name] = prop_data['url']
+            elif prop_type == 'title' and 'title' in prop_data and prop_data['title']:
+                properties[prop_name] = prop_data['title'][0]['plain_text']
             elif prop_type == 'formula' and 'formula' in prop_data:
                 # 获取公式计算结果
                 formula_result = prop_data['formula']
@@ -411,9 +448,13 @@ def get_page_properties(page_data):
     return properties
 
 
-def generate_folder_path(database_title, page_properties):
-    """根据数据库标题和页面属性生成文件夹路径"""
-    base_folder = clean_folder_name(database_title)
+def generate_folder_path(database_title, page_properties, parent_title=None):
+    """根据数据库标题、父页面标题和页面属性生成文件夹路径"""
+    # 如果有父页面，使用父页面/数据库的结构
+    if parent_title:
+        base_folder = f"{clean_folder_name(parent_title)}/{clean_folder_name(database_title)}"
+    else:
+        base_folder = clean_folder_name(database_title)
     
     # 如果禁用分类，直接返回基础文件夹
     if not ENABLE_CATEGORIZATION:
@@ -528,6 +569,23 @@ def convert_block_to_markdown(block):
         if icon.get('type') == 'emoji':
             icon_text = icon.get('emoji', '') + " "
         return f"**{icon_text}提示**: {text}\n\n"
+    
+    elif block_type == 'child_database' and 'child_database' in block:
+        # 处理嵌入的数据库
+        db_title = block['child_database'].get('title', '未命名数据库')
+        db_id = block.get('id', '')
+        
+        # 获取数据库内容并转换为表格
+        database_table = convert_database_to_table(db_id, db_title)
+        
+        return f"### 📋 {db_title}\n\n{database_table}\n\n> **说明**: 此数据库内容已同步到 `{db_title}/` 文件夹，每行数据对应一个独立的markdown文件\n\n"
+    
+    elif block_type == 'link_to_page' and 'link_to_page' in block:
+        # 处理页面链接
+        page_info = block['link_to_page']
+        if page_info.get('type') == 'page_id':
+            page_id = page_info.get('page_id', '')
+            return f"🔗 **链接到页面**: `{page_id}`\n\n"
 
     return ""
 
@@ -539,6 +597,111 @@ def extract_text_from_rich_text(rich_text_array):
         if 'plain_text' in rich_text:
             text += rich_text['plain_text']
     return text
+
+
+def convert_database_to_table(database_id, database_title):
+    """将数据库内容转换为markdown表格"""
+    try:
+        # 获取数据库数据
+        notes_data = fetch_notion_notes(database_id)
+        if not notes_data or 'results' not in notes_data:
+            return f"*无法获取数据库 {database_title} 的内容*"
+        
+        pages = notes_data['results']
+        if not pages:
+            return f"*数据库 {database_title} 暂无数据*"
+        
+        # 获取数据库信息以了解属性结构
+        db_info = get_database_info(database_id)
+        if not db_info or not db_info.get('data'):
+            return f"*无法获取数据库 {database_title} 的结构信息*"
+        
+        # 获取属性列表
+        properties = db_info['data'].get('properties', {})
+        
+        # 构建表格头部
+        headers = []
+        prop_keys = []
+        
+        # 检查是否有用户自定义的属性配置
+        if DATABASE_TABLE_PROPERTIES:
+            # 使用用户自定义的属性
+            custom_props = [prop.strip() for prop in DATABASE_TABLE_PROPERTIES.split(',') if prop.strip()]
+            for prop_name in custom_props:
+                if prop_name in properties:
+                    # 直接使用用户配置的属性名作为表头
+                    headers.append(prop_name)
+                    prop_keys.append(prop_name)
+        else:
+            # 使用默认的智能选择
+            important_props = ['开发', '标题', 'Status', 'Category', 'Type', '状态', '分类', '类型', 'Full Date', '环境']
+            
+            # 先添加标题类型的属性
+            title_prop = None
+            for prop_name, prop_data in properties.items():
+                if prop_data.get('type') == 'title':
+                    title_prop = prop_name
+                    break
+            
+            if title_prop:
+                headers.append('名称')
+                prop_keys.append(title_prop)
+            
+            # 按重要性添加其他属性
+            for prop_name in important_props:
+                if prop_name in properties and prop_name != title_prop and len(headers) < 4:
+                    headers.append(prop_name)
+                    prop_keys.append(prop_name)
+            
+            # 如果还有空间，添加剩余属性
+            for prop_name, prop_data in properties.items():
+                if prop_name not in prop_keys and len(headers) < 4:
+                    headers.append(prop_name)
+                    prop_keys.append(prop_name)
+        
+        if not headers:
+            return f"*数据库 {database_title} 无可显示的属性*"
+        
+        # 构建markdown表格
+        table_lines = []
+        
+        # 表格头
+        table_lines.append('| ' + ' | '.join(headers) + ' |')
+        table_lines.append('| ' + ' | '.join(['---'] * len(headers)) + ' |')
+        
+        # 表格数据行
+        for page in reversed(pages):  # 显示所有行
+            page_properties = get_page_properties(page)
+            row_data = []
+            
+            for prop_key in prop_keys:
+                if prop_key in page_properties:
+                    value = page_properties[prop_key]
+                    # 处理不同类型的值
+                    if isinstance(value, list):
+                        cell_value = ', '.join(str(v) for v in value)
+                    elif isinstance(value, str):
+                        cell_value = value
+                    else:
+                        cell_value = str(value)
+                    
+                    # 限制单元格长度
+                    if len(cell_value) > 20:
+                        cell_value = cell_value[:20] + '...'
+                    
+                    # 转义markdown特殊字符
+                    cell_value = cell_value.replace('|', '\\|').replace('\n', ' ')
+                    row_data.append(cell_value)
+                else:
+                    row_data.append('-')
+            
+            table_lines.append('| ' + ' | '.join(row_data) + ' |')
+        
+        return '\n'.join(table_lines)
+        
+    except Exception as e:
+        print(f"⚠️ 转换数据库表格时出错: {e}")
+        return f"*转换数据库 {database_title} 为表格时出错*"
 
 
 def get_file_content_hash(content):
@@ -812,8 +975,11 @@ def process_database(database_info, db_index, total_dbs, file_mapping, database_
     """处理单个数据库"""
     database_id = database_info['id']
     database_title = database_info['title']
+    parent_title = database_info.get('parent_title')
 
     print(f"\n📚 正在处理数据库 {db_index}/{total_dbs}: {database_title}")
+    if parent_title:
+        print(f"   🔗 父页面: {parent_title}")
 
     # 获取数据库中的笔记
     notes_data = fetch_notion_notes(database_id)
@@ -843,8 +1009,8 @@ def process_database(database_info, db_index, total_dbs, file_mapping, database_
         if not title:
             title = f"页面_{page_id}"
         
-        # 生成文件夹路径
-        folder_path = generate_folder_path(database_title, page_properties)
+        # 生成文件夹路径（传入父页面标题）
+        folder_path = generate_folder_path(database_title, page_properties, parent_title)
         
         # 统计文件夹
         if folder_path not in folder_stats:
