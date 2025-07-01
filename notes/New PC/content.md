@@ -4,7 +4,7 @@
 
 **创建时间**: 2025-06-09T07:09:00.000Z
 
-**最后编辑**: 2025-06-10T14:49:00.000Z
+**最后编辑**: 2025-06-28T13:17:00.000Z
 
 ---
 
@@ -117,5 +117,13 @@ endlocal
 *Typora无限试用*
 
 - https://www.wps.cn/
+
+
+## 网站收藏
+
+- 电子书：https://www.oreilly.com/
+- 论文：https://arxiv.org/
+- C++：http://learn.microsoft.com/
+- C++：http://en.cppreference.com/
 
 
