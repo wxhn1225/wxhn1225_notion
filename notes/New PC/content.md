@@ -4,7 +4,7 @@
 
 **创建时间**: 2025-06-09T07:09:00.000Z
 
-**最后编辑**: 2025-06-28T13:17:00.000Z
+**最后编辑**: 2025-08-04T00:03:00.000Z
 
 ---
 
@@ -42,6 +42,7 @@
 | Web | Postman |
 | SQL | MySQL、Redis、MongoDB |
 | JavaScript | Node.js |
+| Code CLI | Claude-Code |
 
 > **说明**: 此数据库内容已同步到 `环境安装/` 文件夹，每行数据对应一个独立的markdown文件
 
@@ -53,6 +54,22 @@
 - https://www.dingtalk.com/download
 - https://work.weixin.qq.com/nl/sem/registe?from=1011040020&type=1&bd_vid=10991918950830638444
 - https://www.feishu.cn/download
+
+
+## 视频
+
+- https://www.bilibili.com/
+- https://www.youtube.com/
+
+
+## 资源
+
+- https://github.com/
+
+
+## 论坛
+
+- https://www.reddit.com/
 
 
 ## 远程控制
