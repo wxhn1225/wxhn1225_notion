@@ -40,7 +40,7 @@
   "20d685b0-888a-80c5-be98-d0619ac38714": "notes/Reading List/Not started/图解TCP_IP.md",
   "20d685b0-888a-802a-a84d-f416e4f45f40": "notes/New PC/content.md",
   "20d685b0-888a-8044-9f2b-d68c7ae4a471": "notes/Notion更新/content.md",
-  "20e685b0-888a-80e8-b158-f41d1a661d64": "notes/Reading List/Reading/RAG实战课.md",
+  "20e685b0-888a-80e8-b158-f41d1a661d64": "notes/Reading List/Not started/RAG实战课.md",
   "20e685b0-888a-802b-9436-fc18f0315682": "notes/Reading List/Reading/大模型算法：强化学习、微调与对齐.md",
   "20d685b0-888a-80dc-9f42-c00b9e5d0c11": "notes/Reading List/Reading/深度学习入门4：强化学习.md",
   "20d685b0-888a-801c-b336-e93a7f2493e6": "notes/Reading List/Not started/图解网络硬件.md",
@@ -62,7 +62,11 @@
   "20f685b0-888a-805e-ad37-fe84b405a94a": "notes/Project Planner/In progress/报名认证.md",
   "20f685b0-888a-80c1-9482-e2b03d7c17ef": "notes/Project Planner/Not started/代码提交.md",
   "20f685b0-888a-8036-a6fd-cb3690fd8434": "notes/Project Planner/In progress/AFAC2025.md",
-  "211685b0-888a-8090-9e68-f9df4a39bb13": "notes/Reading List/Reading/Linux高性能服务器编程.md",
-  "212685b0-888a-8085-ae3e-c1d5d42f0cc2": "notes/Reading List/Reading/程序员的自我修养（链接、装载与库）.md",
-  "211685b0-888a-8054-8cd9-f72b353890d0": "notes/Reading List/Reading/LINUX命令行大全（第2版）.md"
+  "211685b0-888a-8090-9e68-f9df4a39bb13": "notes/Reading List/Not started/Linux高性能服务器编程.md",
+  "212685b0-888a-8085-ae3e-c1d5d42f0cc2": "notes/Reading List/Not started/程序员的自我修养（链接、装载与库）.md",
+  "211685b0-888a-8054-8cd9-f72b353890d0": "notes/Reading List/Completed/LINUX命令行大全（第2版）.md",
+  "21c685b0-888a-80cf-9687-ecfbe76b553b": "notes/Reading List/Not started/百面大模型.md",
+  "223685b0-888a-801f-93e1-ff14d6f59c5b": "notes/Reading List/Not started/大模型技术30讲.md",
+  "223685b0-888a-80f3-a158-d8250fa4227e": "notes/Reading List/Reading/强化学习的数学原理.md",
+  "232685b0-888a-80fc-bb70-f0e0c3060af8": "notes/New PC/环境安装/Code_CLI.md"
 }
